@@ -4,25 +4,77 @@ import argparse
 from tqdm import tqdm
 from colorama import Fore, Style, init
 import os
+import socket
+from datetime import datetime
 
+# Inicializar colorama
 init(autoreset=True)
 
-def check_subdomain(subdomain, verbose=False):
+def check_port(subdomain, port):
+    """Verifica se uma porta está aberta em um subdomínio."""
+    try:
+        with socket.create_connection((subdomain, port), timeout=2):
+            return port
+    except (socket.timeout, ConnectionRefusedError, OSError):
+        return None
+
+def check_ports_parallel(subdomain, ports_to_check):
+    """Verifica múltiplas portas em paralelo e retorna as portas abertas."""
+    # Remover http:// ou https:// do subdomínio, se presente
+    subdomain = normalizar_subdominio(subdomain)
+    
+    open_ports = []
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(check_port, subdomain, port): port for port in ports_to_check}
+        for future in as_completed(futures):
+            port = future.result()
+            if port:
+                open_ports.append(port)
+    return open_ports
+
+def format_ports(ports, color_output=True):
+    """Formata as portas para exibição, destacando 80 e 443 em azul e outras portas em vermelho no terminal."""
+    if color_output:
+        formatted_ports = []
+        for port in ports:
+            if port in [80, 443]:
+                formatted_ports.append(f"{Fore.CYAN}{port}{Style.RESET_ALL}")
+            else:
+                formatted_ports.append(f"{Fore.RED}{port}{Style.RESET_ALL}")
+        return ', '.join(formatted_ports)
+    else:
+        return ', '.join(map(str, ports))
+
+def check_subdomain(subdomain, verbose=False, check_ports=False):
+    # Remover http:// ou https:// do subdomínio, se presente
+    subdomain = normalizar_subdominio(subdomain)
+    
     try:
         response = requests.get(f"http://{subdomain}", timeout=5)
         if response.status_code == 200:
+            open_ports = []
             if verbose:
-                print(f"\n{Fore.GREEN}[SUCCESS]{Style.RESET_ALL} {subdomain} está {Fore.GREEN}acessível{Style.RESET_ALL} (HTTP 200).\n")
-            return subdomain, "Acessível"
+                print(f"\n{Fore.GREEN}[SUCCESS]{Style.RESET_ALL} {subdomain} está {Fore.GREEN}acessível{Style.RESET_ALL} (HTTP 200).")
+                
+                if check_ports:
+                    ports_to_check = [80, 443, 21, 22, 25, 3306, 1433, 1521, 5432, 6379, 27017, 8080]
+                    open_ports = check_ports_parallel(subdomain, ports_to_check)
+                    
+                    if open_ports:
+                        formatted_ports = format_ports(open_ports, color_output=True)
+                        print(f"{Fore.CYAN}Portas abertas em {subdomain}: {formatted_ports}{Style.RESET_ALL}\n")
+                    else:
+                        print(f"{Fore.CYAN}Nenhuma porta adicional encontrada aberta em {subdomain}.{Style.RESET_ALL}\n")
+            return subdomain, "Acessível", open_ports
         else:
             if verbose:
                 print(f"\n{Fore.YELLOW}[WARNING]{Style.RESET_ALL} {subdomain} retornou {Fore.YELLOW}erro HTTP {response.status_code}{Style.RESET_ALL}.\n")
-            return subdomain, f"Erro HTTP {response.status_code}"
+            return subdomain, f"Erro HTTP {response.status_code}", []
     except requests.exceptions.RequestException as e:
         error_message = str(e).split(': ')[-1]
         if verbose:
             print(f"\n{Fore.RED}[ERROR]{Style.RESET_ALL} {subdomain} não acessível.\nErro: {error_message}\n")
-        return subdomain, "Não acessível"
+        return subdomain, "Não acessível", []
 
 def filtrar_subdominios_por_dominio(input_file, dominio_escolhido):
     subdominios_filtrados = []
@@ -64,16 +116,24 @@ def remover_duplicatas(subdomains):
         print(f"\n{Fore.YELLOW}[INFO]{Style.RESET_ALL} Duplicatas encontradas e removidas. Total de subdomínios únicos: {len(subdomains_unicos)}.\n")
     return subdomains_unicos
 
+def normalizar_subdominio(subdominio):
+    """Remove http:// ou https:// do início do subdomínio, se presente."""
+    if subdominio.startswith("http://"):
+        return subdominio[len("http://"):]
+    elif subdominio.startswith("https://"):
+        return subdominio[len("https://"):]
+    return subdominio
+
 def combinar_e_remover_duplicatas(wordlist1, wordlist2):
     subdomains = set()
     
     with open(wordlist1, 'r') as file:
         for linha in file:
-            subdomains.add(linha.strip())
+            subdomains.add(normalizar_subdominio(linha.strip()))
     
     with open(wordlist2, 'r') as file:
         for linha in file:
-            subdomains.add(linha.strip())
+            subdomains.add(normalizar_subdominio(linha.strip()))
 
     combined_wordlist_file = "combined_wordlist.txt"
     with open(combined_wordlist_file, 'w') as file:
@@ -83,6 +143,37 @@ def combinar_e_remover_duplicatas(wordlist1, wordlist2):
     print(f"\n{Fore.CYAN}Wordlist combinada criada sem duplicatas: '{combined_wordlist_file}'.{Style.RESET_ALL}\n")
     
     return combined_wordlist_file
+
+def remover_repeticoes_e_retornar_diferenca(wordlist1, wordlist2):
+    """Remove as repetições entre dois arquivos de wordlist e retorna a diferença."""
+    subdomains1 = set()
+    subdomains2 = set()
+    
+    with open(wordlist1, 'r') as file:
+        for linha in file:
+            subdomains1.add(normalizar_subdominio(linha.strip()))
+    
+    with open(wordlist2, 'r') as file:
+        for linha in file:
+            subdomains2.add(normalizar_subdominio(linha.strip()))
+    
+    diferenca = subdomains1.symmetric_difference(subdomains2)
+    
+    diferenca_file = "diferenca_wordlists.txt"
+    with open(diferenca_file, 'w') as file:
+        for subdomain in sorted(diferenca):
+            file.write(f"{subdomain}\n")
+    
+    print(f"\n{Fore.CYAN}Arquivo com a diferença entre as wordlists salvo como '{diferenca_file}'.{Style.RESET_ALL}\n")
+    
+    return diferenca_file
+
+def criar_pasta_execucao():
+    """Cria uma pasta para armazenar os resultados desta execução."""
+    timestamp = datetime.now().strftime("%y%m%d_%H%M")
+    pasta_nome = f"exec_{timestamp}"
+    os.makedirs(pasta_nome, exist_ok=True)
+    return pasta_nome
 
 def main():
     parser = argparse.ArgumentParser(
@@ -95,7 +186,9 @@ def main():
             "  python checa-dominios.py -w subdomains.txt -e -v\n"
             "  python checa-dominios.py -w subdomains.txt -e -f exemplo.com -v\n"
             "  python checa-dominios.py -w subdomains.txt -c\n"
-            "  python checa-dominios.py -w subdomains1.txt subdomains2.txt -g"
+            "  python checa-dominios.py -w subdomains1.txt subdomains2.txt -g\n"
+            "  python checa-dominios.py -w subdomains1.txt subdomains2.txt -rm\n"
+            "  python checa-dominios.py -w subdomains.txt -vp"
         ),
         formatter_class=argparse.RawTextHelpFormatter
     )
@@ -110,6 +203,11 @@ def main():
         "-v", "--verbose", 
         action="store_true", 
         help="Ativa a saída verbosa, mostrando detalhes de cada verificação."
+    )
+    parser.add_argument(
+        "-vp", "--verbose_ports", 
+        action="store_true", 
+        help="Ativa a saída verbosa com verificação de portas abertas."
     )
     parser.add_argument(
         "-f", "--filter", 
@@ -130,12 +228,26 @@ def main():
         action="store_true", 
         help="Gera uma wordlist combinada de duas listas sem duplicatas e salva em um novo arquivo."
     )
+    parser.add_argument(
+        "-rm", "--remove_matches", 
+        action="store_true", 
+        help="Remove as duplicações entre duas wordlists e retorna a diferença entre elas."
+    )
     
     args = parser.parse_args()
 
-    verbose = args.verbose
+    verbose = args.verbose or args.verbose_ports
+    check_ports = args.verbose_ports
+
+    # Cria a pasta para a execução
+    pasta_execucao = criar_pasta_execucao()
 
     if len(args.wordlist) == 2:
+        if args.remove_matches:
+            diferenca_file = remover_repeticoes_e_retornar_diferenca(args.wordlist[0], args.wordlist[1])
+            os.rename(diferenca_file, os.path.join(pasta_execucao, diferenca_file))
+            return
+
         wordlist_file = combinar_e_remover_duplicatas(args.wordlist[0], args.wordlist[1])
 
         if args.generate:
@@ -174,8 +286,10 @@ def main():
     results = []
     accessible_subdomains = []
 
+    subdomains_ports = []  # Lista para armazenar subdomínios e portas
+
     with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = {executor.submit(check_subdomain, subdomain, verbose): subdomain for subdomain in subdomains}
+        futures = {executor.submit(check_subdomain, subdomain, verbose, check_ports): subdomain for subdomain in subdomains}
 
         if not verbose:
             print("\n")
@@ -184,25 +298,36 @@ def main():
             pbar = None
 
         for future in as_completed(futures):
-            subdomain, status = future.result()
+            subdomain, status, open_ports = future.result()
             results.append((subdomain, status))
             if status == "Acessível":
                 accessible_subdomains.append(subdomain)
+            if open_ports:
+                subdomains_ports.append((subdomain, open_ports))
             if pbar:
                 pbar.update(1)
 
         if pbar:
             pbar.close()
 
-    with open("subdomain_results.txt", "w") as result_file:
+    # Salva os arquivos de resultados na pasta da execução
+    with open(os.path.join(pasta_execucao, "subdomain_results.txt"), "w") as result_file:
         for subdomain, status in results:
             result_file.write(f"{subdomain}: {status}\n")
 
-    with open("accessible_subdomains.txt", "w") as accessible_file:
+    with open(os.path.join(pasta_execucao, "accessible_subdomains.txt"), "w") as accessible_file:
         for subdomain in accessible_subdomains:
             accessible_file.write(f"{subdomain}\n")
 
-    print(f"\n{Fore.CYAN}Verificação completa.{Style.RESET_ALL} Resultados salvos em 'subdomain_results.txt' e subdomínios acessíveis em 'accessible_subdomains.txt'.\n")
+    # Salva os subdomínios e as portas abertas em um arquivo
+    if check_ports:
+        with open(os.path.join(pasta_execucao, "subdomains_ports.txt"), "w") as ports_file:
+            for subdomain, ports in subdomains_ports:
+                formatted_ports = format_ports(ports, color_output=False)
+                ports_file.write(f"{subdomain}:\n")
+                ports_file.write(f"Portas abertas: {formatted_ports}\n\n")
+
+    print(f"\n{Fore.CYAN}Verificação completa.{Style.RESET_ALL} Resultados salvos na pasta '{pasta_execucao}'.\n")
 
     if len(args.wordlist) == 2 or args.filter or args.eliminate:
         os.remove(wordlist_file)
