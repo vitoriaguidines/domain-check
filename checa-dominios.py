@@ -7,11 +7,9 @@ import os
 import socket
 from datetime import datetime
 
-# Inicializar colorama
 init(autoreset=True)
 
 def check_port(subdomain, port):
-    """Verifica se uma porta está aberta em um subdomínio."""
     try:
         with socket.create_connection((subdomain, port), timeout=2):
             return port
@@ -19,8 +17,6 @@ def check_port(subdomain, port):
         return None
 
 def check_ports_parallel(subdomain, ports_to_check):
-    """Verifica múltiplas portas em paralelo e retorna as portas abertas."""
-    # Remover http:// ou https:// do subdomínio, se presente
     subdomain = normalizar_subdominio(subdomain)
     
     open_ports = []
@@ -33,7 +29,6 @@ def check_ports_parallel(subdomain, ports_to_check):
     return open_ports
 
 def format_ports(ports, color_output=True):
-    """Formata as portas para exibição, destacando 80 e 443 em azul e outras portas em vermelho no terminal."""
     if color_output:
         formatted_ports = []
         for port in ports:
@@ -46,7 +41,6 @@ def format_ports(ports, color_output=True):
         return ', '.join(map(str, ports))
 
 def check_subdomain(subdomain, verbose=False, check_ports=False):
-    # Remover http:// ou https:// do subdomínio, se presente
     subdomain = normalizar_subdominio(subdomain)
     
     try:
@@ -117,7 +111,6 @@ def remover_duplicatas(subdomains):
     return subdomains_unicos
 
 def normalizar_subdominio(subdominio):
-    """Remove http:// ou https:// do início do subdomínio, se presente."""
     if subdominio.startswith("http://"):
         return subdominio[len("http://"):]
     elif subdominio.startswith("https://"):
@@ -145,7 +138,6 @@ def combinar_e_remover_duplicatas(wordlist1, wordlist2):
     return combined_wordlist_file
 
 def remover_repeticoes_e_retornar_diferenca(wordlist1, wordlist2):
-    """Remove as repetições entre dois arquivos de wordlist e retorna a diferença."""
     subdomains1 = set()
     subdomains2 = set()
     
@@ -169,7 +161,6 @@ def remover_repeticoes_e_retornar_diferenca(wordlist1, wordlist2):
     return diferenca_file
 
 def criar_pasta_execucao():
-    """Cria uma pasta para armazenar os resultados desta execução."""
     timestamp = datetime.now().strftime("%y%m%d_%H%M")
     pasta_nome = f"exec_{timestamp}"
     os.makedirs(pasta_nome, exist_ok=True)
@@ -239,7 +230,6 @@ def main():
     verbose = args.verbose or args.verbose_ports
     check_ports = args.verbose_ports
 
-    # Cria a pasta para a execução
     pasta_execucao = criar_pasta_execucao()
 
     if len(args.wordlist) == 2:
@@ -286,7 +276,7 @@ def main():
     results = []
     accessible_subdomains = []
 
-    subdomains_ports = []  # Lista para armazenar subdomínios e portas
+    subdomains_ports = [] 
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         futures = {executor.submit(check_subdomain, subdomain, verbose, check_ports): subdomain for subdomain in subdomains}
@@ -310,7 +300,6 @@ def main():
         if pbar:
             pbar.close()
 
-    # Salva os arquivos de resultados na pasta da execução
     with open(os.path.join(pasta_execucao, "subdomain_results.txt"), "w") as result_file:
         for subdomain, status in results:
             result_file.write(f"{subdomain}: {status}\n")
@@ -319,7 +308,6 @@ def main():
         for subdomain in accessible_subdomains:
             accessible_file.write(f"{subdomain}\n")
 
-    # Salva os subdomínios e as portas abertas em um arquivo
     if check_ports:
         with open(os.path.join(pasta_execucao, "subdomains_ports.txt"), "w") as ports_file:
             for subdomain, ports in subdomains_ports:
